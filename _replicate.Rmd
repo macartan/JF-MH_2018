@@ -1,0 +1,431 @@
+---
+title: "Why do women cooperate more in women's groups?"
+author: James Fearon\footnote{Stanford University, \texttt{jfearon@stanford.edu}.
+  This paper uses data from an experiment implemented jointly with Jeremy Weinstein,
+  to whom we are deeply indebted. We thank also Nicholai Lidow and Gwendolyn Taylor
+  for leading the game and follow-up survey data collection teams in the field, and
+  to Andrea Abel, Jessica Gottlieb, and Amanda Robinson for their fieldwork on the
+  public goods games.  We thank the National Ex-Combatant Peace-building Initiative  for
+  their research support in Liberia, in particular K. Johnson Borh and Morlee Zawoo,
+  and Brian Coyne. AUSAID, through a grant to the Center for Global Development,  provided
+  the resources to implement the behavioral measures described in this paper; the
+  Center for Democracy, Development, and the Rule of Law provided funding for field
+  work expenses and the International Growth Center provided support for final data
+  compilation and analysis.} and Macartan Humphreys\footnote{Columbia University and
+  WZB, \texttt{mh2245@columbia.edu}.}
+date: "February 2018"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    highlight: tango
+---
+This .Rmd file produces all tables reported in the paper _Why do women cooperate more in women's groups?_  from Fearon and Humphreys (2018)
+
+```{r setup, include=FALSE}
+ rm(list = ls())
+ pkgs <- c("knitr","dplyr", "DT", "Hmisc", "rstan", "sandwich", "magrittr", "lmtest", "zoo", "dataverse")
+
+  # Install packages if not yet installed
+lapply(pkgs, function(x) if (!require(x, character.only=T)){install.packages(x);library(x, character.only = T)})
+  knit_theme$set("bluegreen")
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+
+
+
+```
+
+
+
+
+```{r Prep, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+
+# Data
+
+PERM_WOMEN     <- read.csv("W_permutations.csv",as.is=TRUE)[,-1]   
+
+show_code <- TRUE
+run_stan <- FALSE
+source("0_getdata.R")
+source("1_Functions.R")
+source("2_Clean.R")
+source("3_New_Variables.R")
+
+rstan_options(auto_write = TRUE)
+
+options(mc.cores = parallel::detectCores())
+
+
+
+```
+
+
+### Table 1: Effects of composition
+
+```{r echo=show_code, message=FALSE, warning=FALSE, cache=FALSE, Main_Gender, include=TRUE, results='asis'}
+
+# ---------------------------------- #
+ # Randomization Inference Function
+# ---------------------------------- #
+  # Y are contributions
+  # X is true allocation to treatment
+  # BA are analysis blocks
+  # PERM is permutation matrix 
+
+ate_ri <- function(Y, Z, BA=rep(1, length(Y)), subset=TRUE, PERM) {
+  
+  # Exclude village with IRC_CODE == 30
+    Y 		= Y[subset]
+    Z 		= Z[subset]
+    BA 		= BA[subset]
+    PERM 	= PERM[subset,]
+  
+  # Strata weights
+    BANAMES = sort(unique(BA))
+    n = length(Y)		
+    w = (sapply(BANAMES, function(i) sum(BA==i)))/n				
+  
+  # ATE
+    f <- function(x){
+        t = tapply(Y,list(x, BA), mean,na.rm=TRUE)
+        (w%*%(t[2,]-t[1,]))[1,1]
+     }
+    t = tapply(Y,list(Z, BA), mean,na.rm=TRUE)
+    t1 = (w%*%t[2,])[1,1]; t0 =(w%*%t[1,])[1,1]
+   	# ATE
+    est = f(Z)	 		
+   	# ATEs for permutated data
+    null = apply(PERM,2,f) 								
+  
+  # p-values from randomization inference 
+    # p: Ha diff<0
+    pL = mean(null<=est, na.rm=TRUE)
+    # p: Ha diff!=0
+    p  = mean(null>=abs(est), na.rm=TRUE) + mean(null<=-abs(est), na.rm=TRUE)					
+    # p: Ha diff>0
+    pR = mean(null>=est, na.rm=TRUE)											
+  
+  # Neyman standard errors
+    
+    freq = (table(BA)/n)^2
+    var  = tapply(Y, list(BA, Z), var)  
+    n_ba =  tapply(Y, list(BA, Z), length)
+    neyman.se = sqrt(sum(freq*(var[,1]/n_ba[,1]  +  var[,2]/n_ba[,2])))
+    neyman.t = est/neyman.se
+    neyman.p = 2*(1- pt(abs(neyman.t), df=n-2))
+  
+  # produce output
+    out = c(t0, t1,est, n, pR, neyman.se);
+    names(out) = c('T = 0', 'T = 1', 'ATE', 'n',  'p (pos, ri)', 'Neyman se')
+    cbind(out)
+  }
+# ---------------------------------- #
+  # Basic ATE calculation   
+# ---------------------------------- #
+# Define blocks to condition on CDR and district
+  BA <- 10*pvill$treatment + pvill$Voinjama
+
+  ATE_GENDER <- ate_ri(Y = g.eff_df$Y,
+                       Z = g.eff_df$Z,
+                       subset = ((1:83)!=30),
+                       BA = BA,
+                       PERM = PERM_WOMEN)
+   
+  ATE_GENDER_Q <- ate_ri(Y = g.eff_df$Y,
+                         Z = g.eff_df$Z,
+                         subset = ((1:83)!=30 & pvill$Q==1 ),
+                         BA = pvill$treatment,
+                        PERM = PERM_WOMEN)
+  
+  ATE_GENDER_NQ <- ate_ri(Y = g.eff_df$Y,
+                          Z = g.eff_df$Z,
+                          subset = ((1:83)!=30 & pvill$Q==0 ),
+                          BA = pvill$treatment,
+                          PERM=PERM_WOMEN)
+      
+
+table_gender <- round(cbind(ATE_GENDER, ATE_GENDER_Q, ATE_GENDER_NQ),2)
+colnames(table_gender) <- c("All", "In quarters", "Outside quarters")
+ 
+kable(cbind( c("Mixed Villages", "Homogeneous Villages", "Difference (ATE)" ,"N", "$p$ (ri)", "s.e. (Neyman)"), table_gender),row.names = FALSE, caption = "\\label{tab:main} Effects of composition \\\n Source: Authors' own construction ", align = c("l", "c", "c", "c"))
+
+```
+
+
+
+
+
+### Table 2: Expectations given different treatments
+
+```{r EXPECTATIONS 1, echo=show_code, message=FALSE, warning=FALSE, cache=FALSE, comment=NA, include=TRUE, results='asis'}
+# ---------------------------------- #
+  # Cross tabulation
+# ---------------------------------- #
+  summus <- function(vars, round = 2){
+    x <- sapply(vars, function(i) {
+      aggregate(replace(hh[i][,1], hh[i][,1]<0, NA),
+                list(type = hh$gen3), mean, na.rm = TRUE)[,2]
+    })
+    rownames(x) <- conditions
+    round(x, round)
+  }
+
+exp  <- summus(c("kept300", "kept0", "others", "mfgiving3"))
+
+# Actual avg given in group by others
+  # 00 Women-homog
+  # 01 Women-mixed
+  # 11 Men-mixed
+
+  t <- round(tapply(hh$contrib,list(hh$mixed , hh$gender),mean,na.rm=T),2)
+  
+  exp_00 <-  t[1,1]
+  exp_01 <- mean((t[-1,1]*(11/12) + t[-1,2])/(1 + 11/12), na.rm=T)
+  exp_11 <- mean((t[,1] + t[,2]*(11/12))/(1 + 11/12), na.rm=T)
+
+# Produce table
+  exp <- round(cbind(exp[,1:3],c(exp_00, exp_01,exp_11),exp[,4]),2)
+  exp[,1:2] <-round(exp[,1:2]/23,2)
+  exp <- t(exp)
+  
+  rownames(exp) <- c("Expected share giving 0", "Expected share giving 300", "Expected average amount given by others","Actual avgerage given by others","Predict women give strictly more")
+  kable(exp, caption = "\\label{tab:exp} Expectations given different treatments \\\n Source: Authors' own construction " )
+
+```
+
+
+```{r gender, message=FALSE, warning=FALSE, include=FALSE}
+
+hh$Female <- 1 - hh$gender
+hh$homog  <- 1 - hh$mixed
+
+```
+
+### Table 3:  (External) replication of Table 1 (cols 1 and 2) in Greig and Bohnet (2009)
+```{r replicate, echo=show_code, message=FALSE, warning=FALSE, cache=TRUE, comment=NA, include=TRUE, results='asis'}
+
+# ------------------- #
+ # Cluster Robust 
+# ------------------- #
+
+lm_cluster_robust <- function(formula, data, cluster_name, warnings = FALSE){
+
+  # run regression
+  model <- lm(as.formula(formula), data = data, na.action="na.exclude" )
+ 
+  # check number of clusters
+   not.miss<- !is.na(predict(model))
+  cluster<- data[cluster_name][[1]]
+  if(length(not.miss)!=length(cluster)){
+    stop("check your data: cluster variable has different N than model")
+  }
+  M <- length(unique(cluster[not.miss]))
+  N <- length(cluster[not.miss])
+  K <- model$rank
+  if(M<50 & warnings){
+    warning("Fewer than 50 clusters, variances may be unreliable (could try block bootstrap instead).")
+  }
+  
+  # compute robust varcov matrix
+  dfc <- (M/(M - 1)) * ((N - 1)/(N - K))
+  uj  <- apply(estfun(model), 2, function(x) tapply(x, cluster, sum, na.rm=TRUE));
+  vcovCL <- dfc * sandwich(model, meat = crossprod(uj)/N)
+  
+  # return
+  out <- list()
+  out[[1]] <- coeftest(model, vcovCL)
+  out[[2]] <- N
+  out[[3]] <- vcovCL
+  return(out)
+}
+
+# --------------------- #
+ # Run lm with robust varcov 
+# --------------------- #
+  SEs  <- lm_cluster_robust("contrib ~  homog*gender", hh, cluster_name = "irccode", warnings = FALSE)
+  SEs2 <- lm_cluster_robust("contrib ~  homog*gender+others", hh,cluster_name = "irccode", warnings = FALSE)
+  SEs3 <- lm_cluster_robust("contrib ~  homog*gender+others_impute*others_missing", hh, cluster_name = "irccode", warnings = FALSE)
+  SEs4 <- lm_cluster_robust("contrib ~  homog*gender*others_impute +others_impute*others_missing", hh, cluster_name= "irccode", warnings = FALSE)
+
+# Create output
+  x  <- output_function(SEs, coefrows = 1:3, round = 2)
+  x2 <- output_function(SEs2, coefrows = 1:4, round = 2)
+  x3 <- output_function(SEs3, coefrows = 1:4, round = 2)
+  x4 <- output_function(SEs4, coefrows = c(1:4, 6:7), round = 2)
+  X  <- cbind(c(x[-7], rep("",6), x[7]),
+            c(x2[-9], rep("",4), x2[9]),
+            c(x3[-9], rep("",4), x3[9]),
+              x4)
+
+# Define row and colnames
+  rownames(X) <- c("constant", "sd (constant)", "Homogeneous", "sd (Homogeneous)",  "Male", "sd (Male)", "Expectations", "sd (Expectations)", "Expectations are imputed", "sd (Expectations are imputed)","Expectations * Expectations are imputed","sd (Exp * Exp are imputed)","N")
+  
+  r <-  c("constant", "", "Homogeneous", "",  "Male", "", "Expectations", "", "Homog * Expectations", "","Male * Expectations","","N")
+  
+  
+  kable(cbind(r, X), row.names = FALSE, caption = "\\label{tab:rep} (External) Replication of Table 1 (cols 1 and 2)  in Greig et al (2009). Note that all variables are demeaned to simplify interpretation of main terms. \\\n Source: Authors' own construction and  Greig and Bohnet (2009) ", col.names = c("", 1:4), align = c("l","c","c","c"), digits = 2)
+
+```
+
+
+
+### Table 4:  Reports of mobilization activity by condition and CDR treatment status, 0-1 scale
+```{r echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+hh$knreps[hh$knreps==-66 & !(hh$knreps%in%c(-88,-99,""))] <- 1
+hh$knreps[hh$knreps < 0|hh$knreps > 1] <- NA
+```
+
+```{r echo=show_code, message=FALSE, warning=FALSE, cache=FALSE, include=TRUE, results='asis'}
+# ------------------------------------------------------------- #
+  # Table: Reports of mobilization
+# ------------------------------------------------------------- #
+
+# Select mobilization variables
+  mobvars <- dplyr::select(hh, contactpr, contactgm,stayhome,  knreps, othmeets)
+  mobvars[mobvars< 0] <- NA
+# Combined mobilization score  
+  mobvars <- apply(mobvars, 1, mean, na.rm = TRUE)
+  mob <- tapply( mobvars, list(hh$gen3 ,hh$treat), mean, na.rm = TRUE )
+  mob_all <- tapply( mobvars, list(hh$gen3), mean, na.rm = TRUE )
+# Produce table
+  mob <- cbind( mob_all, mob)
+  mob <- t(mob)
+  rownames(mob) <-   c("All", "No CDR", "CDR")
+  colnames(mob) <- conditions
+  kable(mob, digits = 2, caption= "\\label{fig:mob} Reports of mobilization activity by condition and CDR treatment status, 0-1 scale \\\n Source: Authors' own construction" )
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# ------------------------------------------------------------- #
+  # Table: Expectations given different treatments 
+# ------------------------------------------------------------- #
+motiv <- rbind(c("$\\alpha_i$" ,"$i$'s marginal value for contributing independent of use of funds, matching and sanctioning concerns",   "Varies across individuals within gender groups in villages.  $\\alpha_i$ is not estimated.") , 
+      c("$\\alpha$", "Mean of the distribution from which $\\alpha_i$ is drawn",  "Varies by community and potential condition for each gender."), 
+      c("$\\sigma$" , "Standard  Deviation of the distribution from which $\\alpha_i$ is drawn." , "Varies by potential condition."),
+      c("$\\phi$", "Weight on contributing to avoid sanctioning/discomfort if revealed to have given less than 300LD", "Varies by community and potential condition for each gender" ),
+      c("$\\gamma$" ,  "Weight put on matching target contribution $\\rho\\hat{x}_i$.", "Varies by potential condition for each gender."),
+      c("$\\rho$"  , "Share of reported expectation $\\hat x_i$ that $i$ would ideally match if no other motivations.", " Varies by potential condition for each gender."))
+      
+
+colnames(motiv) <- c("Parameter", "Motivation/Preference", "Estimation assumptions")
+#kable(motiv, escape = FALSE, caption = "\\label{fig:maine} Parameter estimates. Note that $\\sigma$ is constrained to be the same for men and women in the mixed condition. Final column shows the posterior probability that the difference between women only and mixed conditions (for women) is positive. \\\n Source: Authors' own construction" )
+```
+
+
+### Table 5: Parameter estimates
+
+
+
+```{r model,  message=FALSE, warning=FALSE, comment = NA}
+# ------------------------------------------------------------- #
+  # Multilevel Bayesian model 
+# ------------------------------------------------------------- #
+
+  (M <- stan_model("X_only_normal.stan"))
+
+```
+
+```{r run_stan, message=FALSE, warning=FALSE}
+
+  hh_f <- dplyr::select(hh, contrib, intst, notanon2, others_impute, irccode, gen3, irccode, mixed, Z, gender)
+  hh_f <- dplyr::filter(hh_f, complete.cases(hh_f))
+  
+  
+  hh_stan <- list(N = nrow(hh_f),
+                  K = length(unique(hh_f$irccode)),
+                  village_id = hh_f$irccode,
+                  r = hh_f$intst,
+                  q = .01+0.98*hh_f$notanon2,
+                  fhomog = ifelse(hh_f$Z == 1, 1, 0),
+                  fmixed = ifelse(hh_f$Z == 2, 1, 0),
+                  male = ifelse(hh_f$Z == 3, 1, 0),
+                  mixed = (dplyr::summarize(group_by(hh_f, irccode), mixed = mean(mixed))$mixed),
+                  homog = (1-dplyr::summarize(group_by(hh_f, irccode), mixed = mean(mixed))$mixed),
+                  X = 1+hh_f$contrib/100,         # On 1-4 scale
+                  E = (hh_f$others_impute)/100,   # On 0-3 scale
+                  sigma = rep(5, 7) #,
+                  )
+  
+
+
+```
+
+
+
+```{r fit_model, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+  if(run_stan){
+  set.seed(1)
+  X_re <- rstan::sampling(M,
+                          data = hh_stan,
+                          warmup = 1000,          # number of warmup iterations per chain
+                          iter = 4000,            # total number of iterations per chain
+                          thin = 1,
+                          control = list(adapt_delta = 0.999),
+                          chains = 4)
+  
+  save(X_re, file = "X_lib.rdata")
+}
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+load("X_lib.rdata")
+
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+# Extract posterior estimates
+  posterior <- rstan::extract(X_re, permuted = TRUE)
+  posterior_df_small <- dplyr::select(as.data.frame(posterior),
+                                      alpha_F, alpha_M, alpha_H,
+                                      phi_F,   phi_M,   phi_H,
+                                      rho_F,   rho_M,   rho_H,
+                                      gamma_F, gamma_M, gamma_H,
+                                      c_MX, c_H,
+                                      sigma_alpha_re,
+                                      sigma_phi_re)
+  
+# Create table
+  out <- cbind(mean = apply(posterior_df_small, 2, mean),
+               sd = apply(posterior_df_small, 2, sd))
+
+  
+# define row names
+  rows <-  c("$\\sigma_\\alpha$", "$\\sigma_\\phi$", 
+             "$\\alpha_F$", "$\\alpha_M$", "$\\alpha_H$", 
+             "$\\phi_F$", "$\\phi_M$", "$\\phi_H$",
+             "$\\gamma_F$", "$\\gamma_M$", "$\\gamma_H$",
+             "$\\rho_F$", "$\\rho_M$", "$\\rho_H$",
+             "$\\sigma_F / \\sigma_M$", "$\\sigma_H$")
+  T <- round(summary(X_re)$summary,2)[c(83+1, (2*83+2):(2*83+16)),c(1,3)]
+
+# reshape
+  ptable <- round(
+            with(posterior_df_small, 
+           {rbind(
+              alpha = c(mean(alpha_M), mean(alpha_F), mean(alpha_H), mean(alpha_H-alpha_F), mean(alpha_H>alpha_F)),
+              sigma = c(mean(c_MX), mean(c_MX), mean(c_H), mean(c_H-c_MX), mean(c_H>c_MX)),
+              phi = c(mean(phi_M), mean(phi_F), mean(phi_H), mean(phi_H-phi_F), mean(phi_H>phi_F)),
+              gamma = c(mean(gamma_M), mean(gamma_F), mean(gamma_H), mean(gamma_H-gamma_F), mean(gamma_H>gamma_F)), 
+              rho = c(mean(rho_M), mean(rho_F), mean(rho_H), mean(rho_H-rho_F), mean(rho_H>rho_F))
+              )}),2)
+  
+  
+ ptable <- rbind(rep("-",5), ptable)
+ kable(cbind(motiv, ptable), 
+          col.names = c("Parameter", "Motivation/Preference", "Estimation assumptions","Men (mixed)", "Women (mixed)", "Women only", "Composition Effect", "Pr >0"), 
+          row.names = FALSE, caption = "\\label{fig:maine} Parameter estimates. Note that $\\sigma$ is constrained to be the same for men and women in the mixed condition. Final column shows the posterior probability that the difference between women only and mixed conditions (for women) is positive.", align = c("cccccc"))
+
+```
+
+
+
+
