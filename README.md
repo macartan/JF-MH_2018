@@ -5,4 +5,4 @@
 * *_2_Clean.R_* and *_3_New_Variables.R_* clean and prepare the data
 * *_W_permutations_* is a matrix of treatment assigment permutations for randomization inference
 * *_X_only_normal.stan_* contains stan model.
-* *_ _replicate.Rmd _* displays replicated tables and figures
+* *__replicate.Rmd _* displays replicated tables and figures
